@@ -8,7 +8,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Skoruba.IdentityServer4.Admin.EntityFramework.Shared.DbContexts;
 using Skoruba.IdentityServer4.Admin.EntityFramework.Shared.Entities.Identity;
-using Skoruba.IdentityServer4.STS.Identity.Configuration.Intefaces;
+using Skoruba.IdentityServer4.STS.Identity.Configuration;
+using Skoruba.IdentityServer4.STS.Identity.Configuration.Constants;
+using Skoruba.IdentityServer4.STS.Identity.Configuration.Interfaces;
 using Skoruba.IdentityServer4.STS.Identity.Helpers;
 
 namespace Skoruba.IdentityServer4.STS.Identity
@@ -17,29 +19,17 @@ namespace Skoruba.IdentityServer4.STS.Identity
     {
         public IConfiguration Configuration { get; }
         public IWebHostEnvironment Environment { get; }
-        public ILogger Logger { get; set; }
 
-        public Startup(IWebHostEnvironment environment, ILoggerFactory loggerFactory)
+        public Startup(IWebHostEnvironment environment, IConfiguration configuration)
         {
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(environment.ContentRootPath)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile($"appsettings.{environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
-                .AddEnvironmentVariables();
-
-            if (environment.IsDevelopment())
-            {
-                builder.AddUserSecrets<Startup>();
-            }
-
-            Configuration = builder.Build();
+            Configuration = configuration;
             Environment = environment;
-            Logger = loggerFactory.CreateLogger<Startup>();
         }
 
         public void ConfigureServices(IServiceCollection services)
         {
-            services.ConfigureRootConfiguration(Configuration);
+            var rootConfiguration = CreateRootConfiguration();
+            services.AddSingleton<IRootConfiguration>(rootConfiguration);
 
             // Register DbContexts for IdentityServer and Identity
             services.RegisterDbContexts<AdminIdentityDbContext, IdentityServerConfigurationDbContext, IdentityServerPersistedGrantDbContext>(Environment, Configuration);
@@ -48,7 +38,7 @@ namespace Skoruba.IdentityServer4.STS.Identity
             services.AddEmailSenders(Configuration);
 
             // Add services for authentication, including Identity model, IdentityServer4 and external providers
-            services.AddAuthenticationServices<IdentityServerConfigurationDbContext, IdentityServerPersistedGrantDbContext, AdminIdentityDbContext, UserIdentity, UserIdentityRole>(Configuration, Logger);
+            services.AddAuthenticationServices<IdentityServerConfigurationDbContext, IdentityServerPersistedGrantDbContext, AdminIdentityDbContext, UserIdentity, UserIdentityRole>(Configuration);
 
             // Add all dependencies for Asp.Net Core Identity in MVC - these dependencies are injected into generic Controllers
             // Including settings for MVC and Localization
@@ -56,16 +46,14 @@ namespace Skoruba.IdentityServer4.STS.Identity
             services.AddMvcWithLocalization<UserIdentity, string>(Configuration);
 
             // Add authorization policies for MVC
-            var rootConfiguration = services.BuildServiceProvider().GetService<IRootConfiguration>();
             services.AddAuthorizationPolicies(rootConfiguration);
 
             services.AddIdSHealthChecks<IdentityServerConfigurationDbContext, IdentityServerPersistedGrantDbContext, AdminIdentityDbContext>(Configuration);
         }
 
+
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env, ILoggerFactory loggerFactory, Microsoft.Extensions.Hosting.IHostApplicationLifetime applicationLifetime)
         {
-            app.AddLogging(loggerFactory, Configuration);
-
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
@@ -88,6 +76,14 @@ namespace Skoruba.IdentityServer4.STS.Identity
                     ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
                 });
             });
+        }
+
+        private IRootConfiguration CreateRootConfiguration()
+        {
+            var rootConfiguration = new RootConfiguration();
+            Configuration.GetSection(ConfigurationConsts.AdminConfigurationKey).Bind(rootConfiguration.AdminConfiguration);
+            Configuration.GetSection(ConfigurationConsts.RegisterConfigurationKey).Bind(rootConfiguration.RegisterConfiguration);
+            return rootConfiguration;
         }
     }
 }

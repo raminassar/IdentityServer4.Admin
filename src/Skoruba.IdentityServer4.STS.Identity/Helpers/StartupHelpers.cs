@@ -21,6 +21,7 @@ using Skoruba.IdentityServer4.STS.Identity.Configuration;
 using Skoruba.IdentityServer4.STS.Identity.Configuration.ApplicationParts;
 using Skoruba.IdentityServer4.STS.Identity.Configuration.Constants;
 using Skoruba.IdentityServer4.STS.Identity.Configuration.Intefaces;
+using Skoruba.IdentityServer4.STS.Identity.Helpers.ADUtilities;
 using Skoruba.IdentityServer4.STS.Identity.Helpers.Localization;
 using Skoruba.IdentityServer4.STS.Identity.Services;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
@@ -41,7 +42,7 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         /// Register services for MVC and localization including available languages
         /// </summary>
         /// <param name="services"></param>
-        public static void AddMvcWithLocalization<TUser, TKey>(this IServiceCollection services, IConfiguration configuration)
+        public static IMvcBuilder AddMvcWithLocalization<TUser, TKey>(this IServiceCollection services, IConfiguration configuration)
             where TUser : IdentityUser<TKey>
             where TKey : IEquatable<TKey>
         {
@@ -49,10 +50,12 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
 
             services.TryAddTransient(typeof(IGenericControllerLocalizer<>), typeof(GenericControllerLocalizer<>));
 
-            services.AddControllersWithViews(o =>
-                {
-                    o.Conventions.Add(new GenericControllerRouteConvention());
-                })
+
+            services.AddMvc(o =>
+            {
+                o.Conventions.Add(new GenericControllerRouteConvention());
+            })
+                .SetCompatibilityVersion(CompatibilityVersion.Version_2_1)
                 .AddViewLocalization(
                     LanguageViewLocationExpanderFormat.Suffix,
                     opts => { opts.ResourcesPath = ConfigurationConsts.ResourcesPath; })
@@ -86,6 +89,8 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
                     opts.SupportedCultures = supportedCultures;
                     opts.SupportedUICultures = supportedCultures;
                 });
+
+            return mvcBuilder;
         }
 
         /// <summary>
@@ -233,8 +238,7 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         /// <typeparam name="TPersistedGrantDbContext"></typeparam>
         /// <param name="services"></param>
         /// <param name="configuration"></param>
-        /// <param name="logger"></param>
-        public static void AddAuthenticationServices<TConfigurationDbContext, TPersistedGrantDbContext, TIdentityDbContext, TUserIdentity, TUserIdentityRole>(this IServiceCollection services, IConfiguration configuration, ILogger logger) where TIdentityDbContext : DbContext
+        public static void AddAuthenticationServices<TConfigurationDbContext, TPersistedGrantDbContext, TIdentityDbContext, TUserIdentity, TUserIdentityRole>(this IServiceCollection services, IConfiguration configuration) where TIdentityDbContext : DbContext
             where TPersistedGrantDbContext : DbContext, IAdminPersistedGrantDbContext
             where TConfigurationDbContext : DbContext, IAdminConfigurationDbContext
             where TUserIdentity : class
@@ -242,10 +246,13 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         {
             var loginConfiguration = GetLoginConfiguration(configuration);
             var registrationConfiguration = GetRegistrationConfiguration(configuration);
+            var windowsAuthConfiguration = GetWindowsAuthConfiguration(configuration);
 
             services
                 .AddSingleton(registrationConfiguration)
                 .AddSingleton(loginConfiguration)
+                .AddSingleton(windowsAuthConfiguration)
+                .AddSingleton<IADUtilities, ADUtilities.ADUtilities>()
                 .AddScoped<UserResolver<TUserIdentity>>()
                 .AddIdentity<TUserIdentity, TUserIdentityRole>(options =>
                 {
@@ -264,7 +271,7 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
 
             AddExternalProviders(authenticationBuilder, configuration);
 
-            AddIdentityServer<TConfigurationDbContext, TPersistedGrantDbContext, TUserIdentity>(services, configuration, logger);
+            AddIdentityServer<TConfigurationDbContext, TPersistedGrantDbContext, TUserIdentity>(services, configuration);
         }
 
         /// <summary>
@@ -286,6 +293,24 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         }
 
         /// <summary>
+        /// Get configuration for login
+        /// </summary>
+        /// <param name="configuration"></param>
+        /// <returns></returns>
+        private static WindowsAuthConfiguration GetWindowsAuthConfiguration(IConfiguration configuration)
+        {
+            var windowsAuthConfiguration = configuration.GetSection(nameof(WindowsAuthConfiguration)).Get<WindowsAuthConfiguration>();
+
+            // Cannot load configuration - use default configuration values
+            if (windowsAuthConfiguration == null)
+            {
+                return new WindowsAuthConfiguration();
+            }
+
+            return windowsAuthConfiguration;
+        }
+
+        /// <summary>
         /// Get configuration for registration
         /// </summary>
         /// <param name="configuration"></param>
@@ -304,24 +329,6 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         }
 
         /// <summary>
-        /// Configuration root configuration
-        /// </summary>
-        /// <param name="services"></param>
-        /// <param name="configuration"></param>
-        /// <returns></returns>
-        public static IServiceCollection ConfigureRootConfiguration(this IServiceCollection services, IConfiguration configuration)
-        {
-            services.AddOptions();
-
-            services.Configure<AdminConfiguration>(configuration.GetSection(ConfigurationConsts.AdminConfigurationKey));
-            services.Configure<RegisterConfiguration>(configuration.GetSection(ConfigurationConsts.RegisterConfiguration));
-
-            services.TryAddSingleton<IRootConfiguration, RootConfiguration>();
-
-            return services;
-        }
-
-        /// <summary>
         /// Add configuration for IdentityServer4
         /// </summary>
         /// <typeparam name="TUserIdentity"></typeparam>
@@ -329,27 +336,26 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         /// <typeparam name="TPersistedGrantDbContext"></typeparam>
         /// <param name="services"></param>
         /// <param name="configuration"></param>
-        /// <param name="logger"></param>
         private static void AddIdentityServer<TConfigurationDbContext, TPersistedGrantDbContext, TUserIdentity>(
             IServiceCollection services,
-            IConfiguration configuration, ILogger logger)
+            IConfiguration configuration)
             where TPersistedGrantDbContext : DbContext, IAdminPersistedGrantDbContext
             where TConfigurationDbContext : DbContext, IAdminConfigurationDbContext
             where TUserIdentity : class
         {
             var builder = services.AddIdentityServer(options =>
-                {
-                    options.Events.RaiseErrorEvents = true;
-                    options.Events.RaiseInformationEvents = true;
-                    options.Events.RaiseFailureEvents = true;
-                    options.Events.RaiseSuccessEvents = true;
-                })
-                .AddConfigurationStore<TConfigurationDbContext>()
-                .AddOperationalStore<TPersistedGrantDbContext>()
-                .AddAspNetIdentity<TUserIdentity>();
+            {
+                options.Events.RaiseErrorEvents = true;
+                options.Events.RaiseInformationEvents = true;
+                options.Events.RaiseFailureEvents = true;
+                options.Events.RaiseSuccessEvents = true;
+            })
+                .AddAspNetIdentity<TUserIdentity>()
+                .AddIdentityServerStoresWithDbContexts<TConfigurationDbContext, TPersistedGrantDbContext>(configuration, hostingEnvironment);
 
-            builder.AddCustomSigningCredential(configuration, logger);
-            builder.AddCustomValidationKey(configuration, logger);
+
+            builder.AddCustomSigningCredential(configuration);
+            builder.AddCustomValidationKey(configuration);
         }
 
         /// <summary>
@@ -381,19 +387,6 @@ namespace Skoruba.IdentityServer4.STS.Identity.Helpers
         {
             var options = app.ApplicationServices.GetService<IOptions<RequestLocalizationOptions>>();
             app.UseRequestLocalization(options.Value);
-        }
-
-        /// <summary>
-        /// Add configuration for logging
-        /// </summary>
-        /// <param name="app"></param>
-        /// <param name="loggerFactory"></param>
-        /// <param name="configuration"></param>
-        public static void AddLogging(this IApplicationBuilder app, ILoggerFactory loggerFactory, IConfiguration configuration)
-        {
-            Log.Logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(configuration)
-                .CreateLogger();
         }
 
         /// <summary>

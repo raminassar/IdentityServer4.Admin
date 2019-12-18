@@ -16,7 +16,7 @@ namespace Skoruba.IdentityServer4.STS.Identity.ViewModels.Manage
         [Display(Name = "Phone number")]
         public string PhoneNumber { get; set; }
 
-        public string StatusMessage { get; set; }
+        public StatusViewModel Status { get; set; }
         [MaxLength(255)]
         [Display(Name = "Full Name")]
         public string Name { get; set; }
@@ -48,5 +48,8 @@ namespace Skoruba.IdentityServer4.STS.Identity.ViewModels.Manage
         [MaxLength(255)]
         [Display(Name = "Country")]
         public string Country { get; set; }
+
+        [Display(Name = "Photo URL")]
+        public string PhotoUrl { get; set; }
     }
 }
