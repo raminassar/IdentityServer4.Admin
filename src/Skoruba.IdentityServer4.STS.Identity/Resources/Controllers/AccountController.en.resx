@@ -126,20 +126,37 @@
   <data name="EmailNotFound" xml:space="preserve">
     <value>The user does not exist or is not confirmed</value>
   </data>
+  <data name="ErrorAddingRoleClaim" xml:space="preserve">
+    <value>It was not possible to add role claim '{0}' for user '{1}'</value>
+  </data>
   <data name="ErrorExternalProvider" xml:space="preserve">
     <value>Error from external provider: {0}</value>
   </data>
+
   <data name="ErrorSendingResetEmail" xml:space="preserve">
     <value>An error occurred sending the email with the instructions to reset your password: {0}</value>
   </data>
   <data name="ErrorSendingVerificationEmail" xml:space="preserve">
     <value>An error occurred sending the verification email: {0}</value>
+
+  <data name="ErrorRemovingRoleClaim" xml:space="preserve">
+    <value>It was not possible to remove role claim '{0}' from user '{1}'</value>
+  </data>
+  <data name="ErrorSyncingUserProfile" xml:space="preserve">
+    <value>It was not possible to update profile of user '{0}' with the new values coming from AD</value>
+  </data>
+  <data name="ErrorUpdatingClaim" xml:space="preserve">
+    <value>It was not possible to update claim of type '{0}' for user '{1}' with new value '{2}'</value>
+
   </data>
   <data name="InvalidAuthenticatorCode" xml:space="preserve">
     <value>Invalid authenticator code.</value>
   </data>
   <data name="InvalidRecoveryCode" xml:space="preserve">
     <value>Invalid recovery code entered.</value>
+  </data>
+  <data name="InvalidUsernameFormat" xml:space="preserve">
+    <value>Invalid username format</value>
   </data>
   <data name="ResetPasswordBody" xml:space="preserve">
     <value>Please reset your password by &lt;a href='{0}'&gt;clicking here&lt;/a&gt;.</value>
@@ -149,5 +166,11 @@
   </data>
   <data name="Unable2FA" xml:space="preserve">
     <value>Unable to load two-factor authentication user.</value>
+  </data>
+  <data name="WindowsAuthenticationFailed" xml:space="preserve">
+    <value>Windows authentication failed</value>
+  </data>
+  <data name="WindowsUsersImported" xml:space="preserve">
+    <value>Windows users import finished: {0} new users imported, {1} users updated, {2} errors (check the logs)</value>
   </data>
 </root>
