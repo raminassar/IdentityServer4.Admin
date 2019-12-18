@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Threading.Tasks;
-using IdentityModel;
 using IdentityServer4.EntityFramework.Options;
 using IdentityServer4.EntityFramework.Storage;
 using Microsoft.AspNetCore.Authentication;
@@ -26,7 +25,14 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using Skoruba.AuditLogging.EntityFramework.DbContexts;
+using Skoruba.AuditLogging.EntityFramework.Entities;
+using Skoruba.AuditLogging.EntityFramework.Extensions;
+using Skoruba.AuditLogging.EntityFramework.Repositories;
+using Skoruba.AuditLogging.EntityFramework.Services;
 using Skoruba.IdentityServer4.Admin.BusinessLogic.Identity.Dtos.Identity;
+using Skoruba.IdentityServer4.Admin.BusinessLogic.Services;
+using Skoruba.IdentityServer4.Admin.BusinessLogic.Services.Interfaces;
 using Skoruba.IdentityServer4.Admin.ExceptionHandling;
 using Skoruba.IdentityServer4.Admin.Middlewares;
 using Skoruba.IdentityServer4.Admin.Configuration;
@@ -34,51 +40,46 @@ using Skoruba.IdentityServer4.Admin.Configuration.ApplicationParts;
 using Skoruba.IdentityServer4.Admin.Configuration.Constants;
 using Skoruba.IdentityServer4.Admin.Configuration.Interfaces;
 using Skoruba.IdentityServer4.Admin.EntityFramework.Interfaces;
+using Skoruba.IdentityServer4.Admin.EntityFramework.Repositories;
+using Skoruba.IdentityServer4.Admin.EntityFramework.Repositories.Interfaces;
 using Skoruba.IdentityServer4.Admin.Helpers.Localization;
+using System.Linq;
+using Microsoft.Extensions.Hosting;
+using Skoruba.IdentityServer4.Admin.EntityFramework.MySql.Extensions;
+using Skoruba.IdentityServer4.Admin.EntityFramework.Shared.Configuration;
+using Skoruba.IdentityServer4.Admin.EntityFramework.SqlServer.Extensions;
+using Skoruba.IdentityServer4.Admin.EntityFramework.PostgreSQL.Extensions;
 
 namespace Skoruba.IdentityServer4.Admin.Helpers
 {
     public static class StartupHelpers
     {
-        /// <summary>
-        /// Register shared DbContext for IdentityServer ConfigurationStore and PersistedGrants, Identity and Logging
-        /// Configure the connection string in AppSettings.json - use AdminConnection key
-        /// </summary>
-        /// <typeparam name="TContext"></typeparam>
-        /// <param name="services"></param>
-        /// <param name="configuration"></param>
-        public static void RegisterDbContexts<TContext>(this IServiceCollection services, IConfigurationRoot configuration)
-            where TContext : DbContext
+        public static IServiceCollection AddAuditEventLogging<TAuditLoggingDbContext, TAuditLog>(this IServiceCollection services, IConfiguration configuration)
+            where TAuditLog : AuditLog, new()
+            where TAuditLoggingDbContext : IAuditLoggingDbContext<TAuditLog>
         {
-            var migrationsAssembly = typeof(Startup).GetTypeInfo().Assembly.GetName().Name;
+            var auditLoggingConfiguration = configuration.GetSection(nameof(AuditLoggingConfiguration)).Get<AuditLoggingConfiguration>();
 
-            var operationalStoreOptions = new OperationalStoreOptions();
-            services.AddSingleton(operationalStoreOptions);
+            services.AddAuditLogging(options => { options.Source = auditLoggingConfiguration.Source; })
+                .AddDefaultHttpEventData(subjectOptions =>
+                    {
+                        subjectOptions.SubjectIdentifierClaim = auditLoggingConfiguration.SubjectIdentifierClaim;
+                        subjectOptions.SubjectNameClaim = auditLoggingConfiguration.SubjectNameClaim;
+                    },
+                    actionOptions =>
+                    {
+                        actionOptions.IncludeFormVariables = auditLoggingConfiguration.IncludeFormVariables;
+                    })
+                .AddAuditSinks<DatabaseAuditEventLoggerSink<TAuditLog>>();
 
-            var storeOptions = new ConfigurationStoreOptions();
-            services.AddSingleton(storeOptions);
+            // repository for library
+            services.AddTransient<IAuditLoggingRepository<TAuditLog>, AuditLoggingRepository<TAuditLoggingDbContext, TAuditLog>>();
 
-            services.AddDbContext<TContext>(options => options.UseSqlServer(configuration.GetConnectionString(ConfigurationConsts.AdminConnectionStringKey), optionsSql => optionsSql.MigrationsAssembly(migrationsAssembly)));
-        }
+            // repository and service for admin
+            services.AddTransient<IAuditLogRepository<TAuditLog>, AuditLogRepository<TAuditLoggingDbContext, TAuditLog>>();
+            services.AddTransient<IAuditLogService, AuditLogService<TAuditLog>>();
 
-        /// <summary>
-        /// Register shared in Memory DbContext for IdentityServer ConfigurationStore and PersistedGrants, Identity and Logging
-        /// For testing purpose only
-        /// </summary>
-        /// <typeparam name="TContext"></typeparam>
-        /// <param name="services"></param>
-        public static void RegisterDbContextsStaging<TContext>(this IServiceCollection services)
-            where TContext : DbContext
-        {
-            var databaseName = Guid.NewGuid().ToString();
-
-            var operationalStoreOptions = new OperationalStoreOptions();
-            services.AddSingleton(operationalStoreOptions);
-
-            var storeOptions = new ConfigurationStoreOptions();
-            services.AddSingleton(storeOptions);
-
-            services.AddDbContext<TContext>(optionsBuilder => optionsBuilder.UseInMemoryDatabase(databaseName));
+            return services;
         }
 
         /// <summary>
@@ -88,42 +89,39 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         /// <typeparam name="TConfigurationDbContext"></typeparam>
         /// <typeparam name="TPersistedGrantDbContext"></typeparam>
         /// <typeparam name="TLogDbContext"></typeparam>
+        /// <typeparam name="TIdentityDbContext"></typeparam>
+        /// <typeparam name="TAuditLoggingDbContext"></typeparam>
         /// <param name="services"></param>
         /// <param name="configuration"></param>
-        public static void RegisterDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext>(this IServiceCollection services, IConfigurationRoot configuration)
+        public static void RegisterDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(this IServiceCollection services, IConfiguration configuration)
             where TIdentityDbContext : DbContext
             where TPersistedGrantDbContext : DbContext, IAdminPersistedGrantDbContext
             where TConfigurationDbContext : DbContext, IAdminConfigurationDbContext
             where TLogDbContext : DbContext, IAdminLogDbContext
+            where TAuditLoggingDbContext : DbContext, IAuditLoggingDbContext<AuditLog>
         {
-            var migrationsAssembly = typeof(Startup).GetTypeInfo().Assembly.GetName().Name;
+            var databaseProvider = configuration.GetSection(nameof(DatabaseProviderConfiguration)).Get<DatabaseProviderConfiguration>();
+            
+            var identityConnectionString = configuration.GetConnectionString(ConfigurationConsts.IdentityDbConnectionStringKey);
+            var configurationConnectionString = configuration.GetConnectionString(ConfigurationConsts.ConfigurationDbConnectionStringKey);
+            var persistedGrantsConnectionString = configuration.GetConnectionString(ConfigurationConsts.PersistedGrantDbConnectionStringKey);
+            var errorLoggingConnectionString = configuration.GetConnectionString(ConfigurationConsts.AdminLogDbConnectionStringKey);
+            var auditLoggingConnectionString = configuration.GetConnectionString(ConfigurationConsts.AdminAuditLogDbConnectionStringKey);
 
-            // Config DB for identity
-            services.AddDbContext<TIdentityDbContext>(options =>
-                options.UseSqlServer(configuration.GetConnectionString(ConfigurationConsts.IdentityDbConnectionStringKey),
-                    sql => sql.MigrationsAssembly(migrationsAssembly)));
-
-            // Config DB from existing connection
-            services.AddConfigurationDbContext<TConfigurationDbContext>(options =>
+            switch (databaseProvider.ProviderType)
             {
-                options.ConfigureDbContext = b =>
-                    b.UseSqlServer(configuration.GetConnectionString(ConfigurationConsts.ConfigurationDbConnectionStringKey),
-                        sql => sql.MigrationsAssembly(migrationsAssembly));
-            });
-
-            // Operational DB from existing connection
-            services.AddOperationalDbContext<TPersistedGrantDbContext>(options =>
-            {
-                options.ConfigureDbContext = b =>
-                    b.UseSqlServer(configuration.GetConnectionString(ConfigurationConsts.PersistedGrantDbConnectionStringKey),
-                        sql => sql.MigrationsAssembly(migrationsAssembly));
-            });
-
-            // Log DB from existing connection
-            services.AddDbContext<TLogDbContext>(options =>
-                options.UseSqlServer(
-                    configuration.GetConnectionString(ConfigurationConsts.AdminLogDbConnectionStringKey),
-                    optionsSql => optionsSql.MigrationsAssembly(migrationsAssembly)));
+                case DatabaseProviderType.SqlServer:
+                    services.RegisterSqlServerDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(identityConnectionString, configurationConnectionString, persistedGrantsConnectionString, errorLoggingConnectionString, auditLoggingConnectionString);
+                    break;
+                case DatabaseProviderType.PostgreSQL:
+                    services.RegisterNpgSqlDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(identityConnectionString, configurationConnectionString, persistedGrantsConnectionString, errorLoggingConnectionString, auditLoggingConnectionString);
+                    break;
+                case DatabaseProviderType.MySql:
+                    services.RegisterMySqlDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(identityConnectionString, configurationConnectionString, persistedGrantsConnectionString, errorLoggingConnectionString, auditLoggingConnectionString);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(databaseProvider.ProviderType), $@"The value needs to be one of {string.Join(", ", Enum.GetNames(typeof(DatabaseProviderType)))}.");
+            }
         }
 
         /// <summary>
@@ -134,17 +132,20 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         /// <typeparam name="TPersistedGrantDbContext"></typeparam>
         /// <typeparam name="TLogDbContext"></typeparam>
         /// <typeparam name="TIdentityDbContext"></typeparam>
+        /// <typeparam name="TAuditLoggingDbContext"></typeparam>
         /// <param name="services"></param>
-        public static void RegisterDbContextsStaging<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext>(this IServiceCollection services)
+        public static void RegisterDbContextsStaging<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(this IServiceCollection services)
             where TIdentityDbContext : DbContext
             where TPersistedGrantDbContext : DbContext, IAdminPersistedGrantDbContext
             where TConfigurationDbContext : DbContext, IAdminConfigurationDbContext
             where TLogDbContext : DbContext, IAdminLogDbContext
+            where TAuditLoggingDbContext : DbContext, IAuditLoggingDbContext<AuditLog>
         {
             var persistedGrantsDatabaseName = Guid.NewGuid().ToString();
             var configurationDatabaseName = Guid.NewGuid().ToString();
             var logDatabaseName = Guid.NewGuid().ToString();
             var identityDatabaseName = Guid.NewGuid().ToString();
+            var auditLoggingDatabaseName = Guid.NewGuid().ToString();
 
             var operationalStoreOptions = new OperationalStoreOptions();
             services.AddSingleton(operationalStoreOptions);
@@ -156,6 +157,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
             services.AddDbContext<TPersistedGrantDbContext>(optionsBuilder => optionsBuilder.UseInMemoryDatabase(persistedGrantsDatabaseName));
             services.AddDbContext<TConfigurationDbContext>(optionsBuilder => optionsBuilder.UseInMemoryDatabase(configurationDatabaseName));
             services.AddDbContext<TLogDbContext>(optionsBuilder => optionsBuilder.UseInMemoryDatabase(logDatabaseName));
+            services.AddDbContext<TAuditLoggingDbContext>(optionsBuilder => optionsBuilder.UseInMemoryDatabase(auditLoggingDatabaseName));
         }
 
         /// <summary>
@@ -209,7 +211,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         /// </summary>
         /// <param name="app"></param>
         /// <param name="env"></param>
-        public static void ConfigureAuthenticationServices(this IApplicationBuilder app, IHostingEnvironment env)
+        public static void ConfigureAuthenticationServices(this IApplicationBuilder app, IWebHostEnvironment env)
         {
             app.UseAuthentication();
 
@@ -230,61 +232,30 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         }
 
         /// <summary>
-        /// Add logging configuration
-        /// </summary>
-        /// <param name="app"></param>
-        /// <param name="loggerFactory"></param>
-        /// <param name="configuration"></param>
-        public static void AddLogging(this IApplicationBuilder app, ILoggerFactory loggerFactory, IConfigurationRoot configuration)
-        {
-            Log.Logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(configuration)
-                .CreateLogger();
-        }
-
-        /// <summary>
-        /// Register shared DbContext
-        /// </summary>
-        /// <typeparam name="TContext"></typeparam>
-        /// <param name="services"></param>
-        /// <param name="hostingEnvironment"></param>
-        /// <param name="configuration"></param>
-        public static void AddDbContexts<TContext>(this IServiceCollection services, IHostingEnvironment hostingEnvironment, IConfigurationRoot configuration)
-        where TContext : DbContext
-        {
-            if (hostingEnvironment.IsStaging())
-            {
-                services.RegisterDbContextsStaging<TContext>();
-            }
-            else
-            {
-                services.RegisterDbContexts<TContext>(configuration);
-            }
-        }
-
-        /// <summary>
         /// Register DbContexts
         /// </summary>
         /// <typeparam name="TConfigurationDbContext"></typeparam>
         /// <typeparam name="TPersistedGrantDbContext"></typeparam>
         /// <typeparam name="TLogDbContext"></typeparam>
         /// <typeparam name="TIdentityDbContext"></typeparam>
+        /// <typeparam name="TAuditLoggingDbContext"></typeparam>
         /// <param name="services"></param>
         /// <param name="hostingEnvironment"></param>
         /// <param name="configuration"></param>
-        public static void AddDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext>(this IServiceCollection services, IHostingEnvironment hostingEnvironment, IConfigurationRoot configuration)
+        public static void AddDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(this IServiceCollection services, IWebHostEnvironment hostingEnvironment, IConfiguration configuration)
             where TIdentityDbContext : DbContext
             where TPersistedGrantDbContext : DbContext, IAdminPersistedGrantDbContext
             where TConfigurationDbContext : DbContext, IAdminConfigurationDbContext
             where TLogDbContext : DbContext, IAdminLogDbContext
+            where TAuditLoggingDbContext : DbContext, IAuditLoggingDbContext<AuditLog>
         {
             if (hostingEnvironment.IsStaging())
             {
-                services.RegisterDbContextsStaging<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext>();
+                services.RegisterDbContextsStaging<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>();
             }
             else
             {
-                services.RegisterDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext>(configuration);
+                services.RegisterDbContexts<TIdentityDbContext, TConfigurationDbContext, TPersistedGrantDbContext, TLogDbContext, TAuditLoggingDbContext>(configuration);
             }
         }
 
@@ -317,7 +288,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         /// <param name="services"></param>
         public static void AddMvcWithLocalization<TUserDto, TUserDtoKey, TRoleDto, TRoleDtoKey, TUserKey, TRoleKey, TUser, TRole, TKey, TUserClaim, TUserRole, TUserLogin, TRoleClaim, TUserToken,
             TUsersDto, TRolesDto, TUserRolesDto, TUserClaimsDto,
-            TUserProviderDto, TUserProvidersDto, TUserChangePasswordDto, TRoleClaimsDto>(this IServiceCollection services)
+            TUserProviderDto, TUserProvidersDto, TUserChangePasswordDto, TRoleClaimsDto>(this IServiceCollection services, IConfiguration configuration)
             where TUserDto : UserDto<TUserDtoKey>, new()
             where TRoleDto : RoleDto<TRoleDtoKey>, new()
             where TUser : IdentityUser<TKey>
@@ -345,11 +316,10 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
 
             services.TryAddTransient(typeof(IGenericControllerLocalizer<>), typeof(GenericControllerLocalizer<>));
 
-            services.AddMvc(o =>
+            services.AddControllersWithViews(o =>
                 {
                     o.Conventions.Add(new GenericControllerRouteConvention());
                 })
-                .SetCompatibilityVersion(CompatibilityVersion.Version_2_1)
                 .AddViewLocalization(
                     LanguageViewLocationExpanderFormat.Suffix,
                     opts => { opts.ResourcesPath = ConfigurationConsts.ResourcesPath; })
@@ -361,21 +331,27 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
                         TUserProviderDto, TUserProvidersDto, TUserChangePasswordDto, TRoleClaimsDto>());
                 });
 
+            var cultureConfiguration = configuration.GetSection(nameof(CultureConfiguration)).Get<CultureConfiguration>();
             services.Configure<RequestLocalizationOptions>(
             opts =>
             {
-                var supportedCultures = new[]
-                {
-                        new CultureInfo("en"),
-                        new CultureInfo("fa"),
-                        new CultureInfo("fr"),
-                        new CultureInfo("ru"),
-                        new CultureInfo("sv"),
-                        new CultureInfo("zh"),
-                        new CultureInfo("es")
-                };
+                // If cultures are specified in the configuration, use them (making sure they are among the available cultures),
+                // otherwise use all the available cultures
+                var supportedCultureCodes = (cultureConfiguration?.Cultures?.Count > 0 ?
+                    cultureConfiguration.Cultures.Intersect(CultureConfiguration.AvailableCultures) :
+                    CultureConfiguration.AvailableCultures).ToArray();
 
-                opts.DefaultRequestCulture = new RequestCulture("en");
+                if (!supportedCultureCodes.Any()) supportedCultureCodes = CultureConfiguration.AvailableCultures;
+                var supportedCultures = supportedCultureCodes.Select(c => new CultureInfo(c)).ToList();
+
+                // If the default culture is specified use it, otherwise use CultureConfiguration.DefaultRequestCulture ("en")
+                var defaultCultureCode = string.IsNullOrEmpty(cultureConfiguration?.DefaultCulture) ?
+                    CultureConfiguration.DefaultRequestCulture : cultureConfiguration?.DefaultCulture;
+
+                // If the default culture is not among the supported cultures, use the first supported culture as default
+                if (!supportedCultureCodes.Contains(defaultCultureCode)) defaultCultureCode = supportedCultureCodes.FirstOrDefault();
+
+                opts.DefaultRequestCulture = new RequestCulture(defaultCultureCode);
                 opts.SupportedCultures = supportedCultures;
                 opts.SupportedUICultures = supportedCultures;
             });
@@ -392,7 +368,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
         /// <param name="services"></param>
         /// <param name="hostingEnvironment"></param>
         /// <param name="adminConfiguration"></param>
-        public static void AddAuthenticationServices<TContext, TUserIdentity, TUserIdentityRole>(this IServiceCollection services, IHostingEnvironment hostingEnvironment, IAdminConfiguration adminConfiguration)
+        public static void AddAuthenticationServices<TContext, TUserIdentity, TUserIdentityRole>(this IServiceCollection services, IWebHostEnvironment hostingEnvironment, AdminConfiguration adminConfiguration)
             where TContext : DbContext where TUserIdentity : class where TUserIdentityRole : class
         {
             services.AddIdentity<TUserIdentity, TUserIdentityRole>(options =>
@@ -473,26 +449,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
             }
         }
 
-        /// <summary>
-        /// Configuration root configuration
-        /// </summary>
-        /// <param name="services"></param>
-        /// <param name="configuration"></param>
-        /// <returns></returns>
-        public static IServiceCollection ConfigureRootConfiguration(this IServiceCollection services, IConfiguration configuration)
-        {
-            services.AddOptions();
-
-            services.Configure<AdminConfiguration>(configuration.GetSection(ConfigurationConsts.AdminConfigurationKey));
-            services.Configure<IdentityDataConfiguration>(configuration.GetSection(ConfigurationConsts.IdentityDataConfigurationKey));
-            services.Configure<IdentityServerDataConfiguration>(configuration.GetSection(ConfigurationConsts.IdentityServerDataConfigurationKey));
-
-            services.TryAddSingleton<IRootConfiguration, RootConfiguration>();
-
-            return services;
-        }
-
-        private static Task OnMessageReceived(MessageReceivedContext context, IAdminConfiguration adminConfiguration)
+        private static Task OnMessageReceived(MessageReceivedContext context, AdminConfiguration adminConfiguration)
         {
             context.Properties.IsPersistent = true;
             context.Properties.ExpiresUtc = new DateTimeOffset(DateTime.Now.AddHours(adminConfiguration.IdentityAdminCookieExpiresUtcHours));
@@ -500,7 +457,7 @@ namespace Skoruba.IdentityServer4.Admin.Helpers
             return Task.FromResult(0);
         }
 
-        private static Task OnRedirectToIdentityProvider(RedirectContext n, IAdminConfiguration adminConfiguration)
+        private static Task OnRedirectToIdentityProvider(RedirectContext n, AdminConfiguration adminConfiguration)
         {
             n.ProtocolMessage.RedirectUri = adminConfiguration.IdentityAdminRedirectUri;
 
